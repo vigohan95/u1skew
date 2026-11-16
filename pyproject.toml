@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "u1skew"
+version = "0.1.0"
+description = "XY/XZ/YZ skew correction for sliced G-code (Snapmaker U1, stock firmware, no Advanced Mode)"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+
+[project.scripts]
+u1skew = "u1skew.cli:main"
