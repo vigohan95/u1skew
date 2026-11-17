@@ -11,3 +11,6 @@ license = {text = "MIT"}
 
 [project.scripts]
 u1skew = "u1skew.cli:main"
+
+[tool.setuptools]
+packages = ["u1skew"]

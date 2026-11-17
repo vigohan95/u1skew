@@ -40,7 +40,7 @@ Generic G-code skew scripts exist, but in our tests they get three things wrong 
 Python 3.8 or newer.
 
 ```
-pip install git+https://github.com/<you>/u1skew
+pip install git+https://github.com/vigohan95/u1skew
 ```
 
 ## 1. Measure

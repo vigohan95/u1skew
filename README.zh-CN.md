@@ -40,7 +40,7 @@ u1skew 是一个切片后处理脚本：Snapmaker Orca 切完片后，它按 Kli
 需要 Python 3.8 及以上。
 
 ```
-pip install git+https://github.com/<you>/u1skew
+pip install git+https://github.com/vigohan95/u1skew
 ```
 
 ## 第一步：测量
