@@ -28,6 +28,18 @@ MARKER = "; u1skew applied"
 _WORD = re.compile(r"([A-Za-z])\s*([-+]?(?:\d+\.?\d*|\.\d+))")
 
 
+# Commands known not to move the toolhead in XY. Anything else that is not a
+# plain G0-G3 line (T0..T3, Snapmaker macros such as
+# MOVE_TO_DISCARD_FILAMENT_POSITION, TIMELAPSE_TAKE_FRAME, unknown user
+# macros) may park or dock the head, so after it the XY position is treated
+# as unknown until the next move that names both X and Y.
+_NO_XY_MOTION = re.compile(
+    r"^(M(73|82|83|84|104|105|106|107|109|117|118|140|190|191|201|202|203|204|205|220|221|400|900)"
+    r"|G(4|17|18|19|21|90|91|92)|EXCLUDE_OBJECT\w*|SET_\w+|M486|RESPOND|SAVE_\w+)\b",
+    re.IGNORECASE,
+)
+
+
 class SkewError(Exception):
     """The file cannot be corrected safely; nothing should be written."""
 
@@ -170,6 +182,11 @@ class Corrector:
         self.out_pos = {a: None for a in AXES}
         self.plane = 17
 
+    def _forget_xy(self):
+        for a in ("X", "Y"):
+            self.pos[a] = None
+            self.out_pos[a] = None
+
     def _machine(self, logical: dict) -> dict:
         return {a: logical[a] + self.in_off[a] for a in AXES}
 
@@ -182,6 +199,9 @@ class Corrector:
     def _line(self, line: str, no: int, rep: Report) -> list[str]:
         cmd = _parse(line)
         if cmd is None or cmd.letter not in ("G", "M"):
+            body = line.split(";", 1)[0].strip()
+            if body and not _NO_XY_MOTION.match(body):
+                self._forget_xy()
             return [line]
         code = cmd.code
         if code == "G90":
@@ -294,6 +314,29 @@ class Corrector:
             self.e = e if self.abs_e else self.e + e
         if not has_xyz:
             return [line]
+        if cmd.get("X") is None and cmd.get("Y") is None and not (self.skew.xz or self.skew.yz):
+            # Z-only move (layer change, Z hop) under an XY-only skew: X/Y
+            # output does not depend on Z, so the line is already correct.
+            z = cmd.get("Z")
+            if self.abs_xyz:
+                self.pos["Z"] = z
+                self.out_pos["Z"] = None if z is None else round(z + self.in_off["Z"] - self.out_off["Z"], self.xyz_digits)
+            elif self.pos["Z"] is not None:
+                self.pos["Z"] += z
+                if self.out_pos["Z"] is not None:
+                    self.out_pos["Z"] = round(self.out_pos["Z"] + z, self.xyz_digits)
+            return [line]
+        if not self.abs_xyz and any(cmd.get(a) is not None and self.pos[a] is None for a in AXES):
+            # Relative move after a macro parked the head somewhere we do not
+            # know: the offset is the same either way, so pass it through.
+            rep.warnings.append(f"line {no}: relative move from unknown position, line left unchanged")
+            for a in AXES:
+                v = cmd.get(a)
+                if v is not None and self.pos[a] is not None:
+                    self.pos[a] += v
+                    if self.out_pos[a] is not None:
+                        self.out_pos[a] = round(self.out_pos[a] + v, self.xyz_digits)
+            return [line]
         tgt = self._target(cmd)
         if self.skew.is_identity:
             self.pos.update(tgt)
@@ -346,6 +389,10 @@ class Corrector:
         x1, y1 = tgt["X"], tgt["Y"]
         z1 = tgt["Z"] if tgt["Z"] is not None else z0
         cw = cmd.code == "G2"
+        turns = cmd.get("P")
+        if turns is not None and turns != 1:
+            # Orca's spiral Z-hop writes "G3 Z.. I.. J.. P1" (one turn).
+            raise SkewError(f"line {no}: arcs with P{turns:g} (multiple turns) are not supported")
         i, j, r = cmd.get("I"), cmd.get("J"), cmd.get("R")
         if i is not None or j is not None:
             cx, cy = x0 + (i or 0.0), y0 + (j or 0.0)

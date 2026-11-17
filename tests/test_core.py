@@ -134,9 +134,9 @@ def test_g10_and_g17_are_not_mistaken_for_moves():
 
 def test_macros_and_comments_pass_through():
     src = ("G90\nG1 X10 Y10 ; travel\nSET_PRINT_STATS_INFO CURRENT_LAYER=2\n"
-           "T1\nM117 hello X5\n;LAYER_CHANGE\nG1 Y20 E1.5 ; inner wall\n")
+           "M117 hello X5\n;LAYER_CHANGE\nG1 Y20 E1.5 ; inner wall\n")
     out, _ = correct_text(src, Skew(xy=0.01))
-    for keep in ["SET_PRINT_STATS_INFO CURRENT_LAYER=2", "T1\n", "M117 hello X5", ";LAYER_CHANGE"]:
+    for keep in ["SET_PRINT_STATS_INFO CURRENT_LAYER=2", "M117 hello X5", ";LAYER_CHANGE"]:
         assert keep in out
     assert "G1 X9.8 Y20 E1.5 ; inner wall" in out
 
@@ -242,3 +242,50 @@ def test_skew_factor_recovers_printed_parallelogram(f):
 
 def test_factor_from_angle():
     assert factor_from_angle(0.5) == pytest.approx(math.tan(math.radians(0.5)))
+
+
+# --- Snapmaker U1 macros / tool changes ------------------------------------
+def test_toolchange_and_macros_forget_xy():
+    # T1 docks/undocks the head; MOVE_TO_* parks it. A partial move after
+    # either must not be "completed" with a stale Y.
+    for macro in ("T1", "MOVE_TO_DISCARD_FILAMENT_POSITION", "TIMELAPSE_TAKE_FRAME"):
+        src = f"G90\nG1 X10 Y20\n{macro}\nG1 X50\nG1 X60 Y20\n"
+        out, rep = correct_text(src, Skew(xy=0.01))
+        assert "\nG1 X50\n" in out, macro
+        assert any("unknown" in w for w in rep.warnings)
+        assert "G1 X59.8 Y20" in out
+
+
+def test_non_motion_macros_keep_position():
+    src = ("G90\nG1 X10 Y20\nSET_PRINT_STATS_INFO CURRENT_LAYER=1\n"
+           "EXCLUDE_OBJECT_START NAME=a\nM106 S255\nM104 S200 T1\nG1 X50\n")
+    out, rep = correct_text(src, Skew(xy=0.01))
+    assert "\nG1 X49.8\n" in out  # Y unchanged, so only X is rewritten
+    assert not rep.warnings
+
+
+def test_relative_move_after_macro_passes_through():
+    # Orca's by-object end G-code: G91 / G1 X2 Y2 Z1 right after a macro.
+    src = "G90\nG1 X10 Y20 Z1\nT0\nG91\nG1 X2 Y2 Z1 F24000\nG90\nG1 X30 Y30\n"
+    out, rep = correct_text(src, Skew(xy=0.01))
+    assert "\nG1 X2 Y2 Z1 F24000\n" in out
+    assert "G1 X29.7 Y30" in out
+
+
+def test_orca_spiral_zhop_helix():
+    # Orca's spiral lift: full-turn helix, I/J only, P1.
+    src = "G90\nG1 X100 Y100 Z.45\nG3 Z.65 I-.219 J-1.197 P1  F30000\nG1 X120 Y100\n"
+    out, rep = correct_text(src, Skew(xy=0.01))
+    assert rep.arcs_flattened == 1 and not rep.warnings
+    pts = [l for l in out.splitlines() if l.startswith("G1 X")]
+    # helix returns to its start XY, at the new Z
+    assert pts[-2].startswith("G1 X99 Y100 Z0.65")
+    with pytest.raises(SkewError):
+        correct_text(src.replace("P1", "P2"), Skew(xy=0.01))
+
+
+def test_z_only_moves_need_no_xy():
+    src = "G28\nG90\nG1 Z5 F600\nG1 Z.2\nG1 X10 Y10\n"
+    out, rep = correct_text(src, Skew(xy=0.01))
+    assert not rep.warnings
+    assert "\nG1 Z5 F600\n" in out and "G1 X9.9 Y10" in out
